@@ -87,6 +87,7 @@ while checked < MAX_ENTRIES_PER_RUN:
     # ---------- 检查是否触发 233 停止（仅当已超过阈值） ----------
     if cur > THRESHOLD_NUM and consecutive_invalid >= MAX_CONSECUTIVE:
         print(f"Reached {MAX_CONSECUTIVE} consecutive invalid after threshold. Stopping.")
+        current_num += 1  # 增加这行，指向下一个编号
         break
 
     # 移动到下一个编号

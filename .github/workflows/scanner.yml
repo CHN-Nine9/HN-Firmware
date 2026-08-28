@@ -5,6 +5,11 @@ on:
   schedule:
     - cron: '0 */8 * * *'   # 每8小时自动运行
   workflow_dispatch:        # 手动触发
+    inputs:
+      continued:
+        description: 'Indicates if this is an automatically continued run'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -19,11 +24,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 1. 仅恢复缓存（使用动态后缀匹配最近一次）
       - name: Restore State (Cache)
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: state
-          key: scanner-state-v2   # 版本号，避免与旧缓存冲突
+          # 加入 run_attempt 防止手动 re-run 时缓存键冲突报错
+          key: scanner-state-v-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            scanner-state-v-
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -50,6 +59,14 @@ jobs:
           path: state/new.csv
           if-no-files-found: error
 
+      # 2. 强制在触发下一次运行前保存缓存
+      - name: Save State (Cache)
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: scanner-state-v-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # 3. 触发下一次运行（此时新缓存已安全保存完毕）
       - name: Trigger Next Run (if max entries reached)
         if: steps.run.outputs.should_continue == 'true'
         uses: actions/github-script@v7
@@ -61,7 +78,7 @@ jobs:
               repo: context.repo.repo,
               workflow_id: 'scanner.yml',   // 当前工作流文件名
               ref: context.ref,
-              inputs: { continued: 'true' } // 可传参数（留空即可）
+              inputs: { continued: 'true' } // 传递已声明的参数
             });
 
       - name: Post Summary
