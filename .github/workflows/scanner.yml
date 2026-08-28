@@ -59,9 +59,9 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'scanner.yml',   # 当前工作流文件名
+              workflow_id: 'scanner.yml',   // 当前工作流文件名
               ref: context.ref,
-              inputs: { continued: 'true' } # 可传参数（留空亦可）
+              inputs: { continued: 'true' } // 可传参数（留空即可）
             });
 
       - name: Post Summary
