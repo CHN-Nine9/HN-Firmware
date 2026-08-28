@@ -1,15 +1,19 @@
-name: Scheduled Incremental Scanner
+name: Incremental Scanner
 
 on:
-  push:
+  push:                # 提交时触发
   schedule:
-    - cron: '0 */8 * * *'
-  workflow_dispatch:
+    - cron: '0 */8 * * *'   # 每8小时自动运行
+  workflow_dispatch:        # 手动触发
+
+permissions:
+  contents: read
+  actions: write            # 允许触发新的工作流
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 300    # 5小时超时（留有余量）
 
     steps:
       - name: Checkout
@@ -19,7 +23,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: state
-          key: scanner-state-v1
+          key: scanner-state-v2   # 版本号，避免与旧缓存冲突
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -27,23 +31,38 @@ jobs:
           python-version: '3.14'
 
       - name: Run Scanner
+        id: run
         env:
-          BASE_URL: "https://your-domain.com/api/resource"   # 修改为实际地址
+          BASE_URL: "https://iknow.service.hihonor.com/weknow/servlet/download/public"   # 替换为实际URL
         run: python scanner.py
 
-      - name: Upload Full History (results.csv)
+      - name: Upload Full History
         uses: actions/upload-artifact@v4
         with:
           name: full-history-${{ github.run_id }}
           path: state/results.csv
           if-no-files-found: error
 
-      - name: Upload New Records (new.csv)
+      - name: Upload New Records
         uses: actions/upload-artifact@v4
         with:
           name: new-records-${{ github.run_id }}
           path: state/new.csv
           if-no-files-found: error
+
+      - name: Trigger Next Run (if max entries reached)
+        if: steps.run.outputs.should_continue == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'scanner.yml',   # 当前工作流文件名
+              ref: context.ref,
+              inputs: { continued: 'true' } # 可传参数（留空亦可）
+            });
 
       - name: Post Summary
         run: |
@@ -54,4 +73,4 @@ jobs:
           if [ -f state/new.csv ]; then
             echo "New records this run: $(($(wc -l < state/new.csv) - 1))" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "Next start ID: W$(cat state/block_start.txt | xargs printf '%08d')" >> $GITHUB_STEP_SUMMARY
+          echo "Next start ID: W$(cat state/next_start.txt | xargs printf '%08d')" >> $GITHUB_STEP_SUMMARY
