@@ -1,0 +1,57 @@
+name: Scheduled Incremental Scanner
+
+on:
+  push:
+  schedule:
+    - cron: '0 */8 * * *'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore State (Cache)
+        uses: actions/cache@v4
+        with:
+          path: state
+          key: scanner-state-v1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Run Scanner
+        env:
+          BASE_URL: "https://your-domain.com/api/resource"   # 修改为实际地址
+        run: python scanner.py
+
+      - name: Upload Full History (results.csv)
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-history-${{ github.run_id }}
+          path: state/results.csv
+          if-no-files-found: error
+
+      - name: Upload New Records (new.csv)
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-records-${{ github.run_id }}
+          path: state/new.csv
+          if-no-files-found: error
+
+      - name: Post Summary
+        run: |
+          echo "## ✅ Scan Completed" >> $GITHUB_STEP_SUMMARY
+          if [ -f state/results.csv ]; then
+            echo "Total records in history: $(($(wc -l < state/results.csv) - 1))" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f state/new.csv ]; then
+            echo "New records this run: $(($(wc -l < state/new.csv) - 1))" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "Next start ID: W$(cat state/block_start.txt | xargs printf '%08d')" >> $GITHUB_STEP_SUMMARY
