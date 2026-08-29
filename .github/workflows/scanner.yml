@@ -11,6 +11,10 @@ on:
         required: false
         type: string
 
+concurrency: 
+  group: scanner-group
+  cancel-in-progress: false
+
 permissions:
   contents: read
   actions: write            # 允许触发新的工作流
