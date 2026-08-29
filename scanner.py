@@ -105,7 +105,8 @@ while checked < MAX_ENTRIES_PER_RUN:
 
     if cur > THRESHOLD_NUM and consecutive_invalid >= MAX_CONSECUTIVE:
         print(f"Reached {MAX_CONSECUTIVE} consecutive invalid after threshold. Stopping.")
-        current_num += 1
+        # 将游标回滚到这 233 个无效链接的第一个位置
+        current_num = cur - MAX_CONSECUTIVE + 1
         break
 
     current_num += 1
