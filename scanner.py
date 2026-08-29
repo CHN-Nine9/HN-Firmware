@@ -3,6 +3,7 @@ import time
 import re
 import urllib.request
 import urllib.error
+import csv
 import json
 import xml.etree.ElementTree as ET
 import xml.dom.minidom
@@ -137,18 +138,23 @@ def generate_formats(csv_path, output_base_name):
     with open(csv_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
         
-    with open(enriched_csv_path, 'w', encoding='utf-8') as f_out:
-        f_out.write("WID,FileName,URL\n")
+    # 使用 csv.writer 安全写入
+    with open(enriched_csv_path, 'w', encoding='utf-8', newline='') as f_out:
+        writer = csv.writer(f_out)
+        writer.writerow(["WID", "FileName", "URL"]) # 写入表头
         
         for line in lines[1:]:
             line = line.strip()
             if not line: continue
+            
+            # 依然用 split(',', 1) 安全读取旧缓存，因为旧缓存只有两列
             parts = line.split(',', 1)
             wid = parts[0]
             filename = parts[1] if len(parts) > 1 else ""
             url = f"{BASE_URL}?contextNo={wid}"
             
-            f_out.write(f"{wid},{filename},{url}\n")
+            # 使用 csv.writer 写入，它会自动把带有逗号的 filename 用双引号包裹
+            writer.writerow([wid, filename, url])
             
             json_list.append({"WID": wid, "FileName": filename, "URL": url})
             
@@ -163,7 +169,6 @@ def generate_formats(csv_path, output_base_name):
     xml_str = xml.dom.minidom.parseString(ET.tostring(xml_root)).toprettyxml(indent="  ")
     with open(os.path.join(STATE_DIR, f"{output_base_name}.xml"), 'w', encoding='utf-8') as f:
         f.write(xml_str)
-
 print("Generating output formats (CSV+URL, JSON, XML)...")
 generate_formats(CSV_ALL, "results_all")
 generate_formats(CSV_VALID_ALL, "valid_all")
