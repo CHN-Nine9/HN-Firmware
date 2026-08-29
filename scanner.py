@@ -3,23 +3,29 @@ import time
 import re
 import urllib.request
 import urllib.error
+import json
+import xml.etree.ElementTree as ET
+import xml.dom.minidom
 from urllib.parse import urlparse
 
 BASE_URL = os.environ.get("BASE_URL", "https://iknow.service.hihonor.com/weknow/servlet/download/public")
 STATE_DIR = "state"
 NEXT_START_FILE = os.path.join(STATE_DIR, "next_start.txt")
-CSV_FILE = os.path.join(STATE_DIR, "results.csv")
-NEW_CSV = os.path.join(STATE_DIR, "new.csv")
+
+# 4个用于底层状态缓存的2列CSV文件路径
+CSV_ALL = os.path.join(STATE_DIR, "results.csv")
+CSV_VALID_ALL = os.path.join(STATE_DIR, "valid_results.csv")
+CSV_NEW = os.path.join(STATE_DIR, "new.csv")
+CSV_VALID_NEW = os.path.join(STATE_DIR, "valid_new.csv")
 
 os.makedirs(STATE_DIR, exist_ok=True)
 
-# ---------- 常量 ----------
 DEFAULT_START = 0
 THRESHOLD_NUM = 65484
 MAX_CONSECUTIVE = 233
 MAX_ENTRIES_PER_RUN = 3250
+MAX_RETRIES = 3
 
-# ---------- 读取起始编号 ----------
 if os.path.exists(NEXT_START_FILE):
     with open(NEXT_START_FILE, 'r') as f:
         content = f.read().strip()
@@ -27,14 +33,19 @@ if os.path.exists(NEXT_START_FILE):
 else:
     start_num = DEFAULT_START
 
-# ---------- 初始化 CSV ----------
-if not os.path.exists(CSV_FILE):
-    with open(CSV_FILE, 'w') as f:
-        f.write("WValue,ResourceOrStatus\n")
-with open(NEW_CSV, 'w') as f:
-    f.write("WValue,ResourceOrStatus\n")
+def init_csv(filepath):
+    if not os.path.exists(filepath):
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("WID,FileName\n")
 
-# ---------- 扫描循环 ----------
+init_csv(CSV_ALL)
+init_csv(CSV_VALID_ALL)
+
+with open(CSV_NEW, 'w', encoding='utf-8') as f:
+    f.write("WID,FileName\n")
+with open(CSV_VALID_NEW, 'w', encoding='utf-8') as f:
+    f.write("WID,FileName\n")
+
 current_num = start_num
 consecutive_invalid = 0
 checked = 0
@@ -45,78 +56,118 @@ while checked < MAX_ENTRIES_PER_RUN:
     cur = current_num
     w_value = f"W{cur:08d}"
     url = f"{BASE_URL}?contextNo={w_value}"
-    print(f"[{checked+1}] Checking: {url}")
-
-    status_or_filename = ""
+    
     is_valid = False
+    status_or_filename = ""
 
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            if resp.status == 200:
-                is_valid = True
-                content_disp = resp.headers.get('Content-Disposition')
-                if content_disp:
-                    match = re.search(r'filename="?([^";]+)"?', content_disp)
-                    if match:
-                        status_or_filename = match.group(1)
-                if not status_or_filename:
-                    parsed = urlparse(url)
-                    status_or_filename = parsed.path.split('/')[-1] or "unknown"
-            else:
-                status_or_filename = str(resp.status)
-    except urllib.error.HTTPError as e:
-        status_or_filename = str(e.code)
-    except Exception as e:
-        status_or_filename = f"Error: {type(e).__name__}"
+    # 网络重试机制
+    for attempt in range(MAX_RETRIES):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status == 200:
+                    is_valid = True
+                    content_disp = resp.headers.get('Content-Disposition')
+                    if content_disp:
+                        match = re.search(r'filename="?([^";]+)"?', content_disp)
+                        if match:
+                            status_or_filename = match.group(1)
+                    if not status_or_filename:
+                        parsed = urlparse(url)
+                        status_or_filename = parsed.path.split('/')[-1] or "unknown"
+                    break
+                else:
+                    status_or_filename = str(resp.status)
+        except urllib.error.HTTPError as e:
+            status_or_filename = str(e.code)
+        except Exception as e:
+            status_or_filename = f"Error: {type(e).__name__}"
+            
+        if not is_valid and attempt < MAX_RETRIES - 1:
+            time.sleep(1)
 
-    # 写入 CSV
+    print(f"[{checked+1}] {w_value} -> {status_or_filename} (Valid: {is_valid})")
+
     line = f"{w_value},{status_or_filename}\n"
-    with open(CSV_FILE, 'a') as f_results, open(NEW_CSV, 'a') as f_new:
-        f_results.write(line)
+    
+    with open(CSV_ALL, 'a', encoding='utf-8') as f_all, open(CSV_NEW, 'a', encoding='utf-8') as f_new:
+        f_all.write(line)
         f_new.write(line)
 
-    # 更新连续无效计数
     if is_valid:
-        print(f"  -> VALID: {status_or_filename}")
+        with open(CSV_VALID_ALL, 'a', encoding='utf-8') as fv_all, open(CSV_VALID_NEW, 'a', encoding='utf-8') as fv_new:
+            fv_all.write(line)
+            fv_new.write(line)
         consecutive_invalid = 0
     else:
         consecutive_invalid += 1
-        print(f"  -> INVALID ({status_or_filename}), consecutive: {consecutive_invalid}")
 
-    # ---------- 检查是否触发 233 停止（仅当已超过阈值） ----------
     if cur > THRESHOLD_NUM and consecutive_invalid >= MAX_CONSECUTIVE:
         print(f"Reached {MAX_CONSECUTIVE} consecutive invalid after threshold. Stopping.")
-        current_num += 1  # 增加这行，指向下一个编号
+        current_num += 1
         break
 
-    # 移动到下一个编号
     current_num += 1
     checked += 1
     time.sleep(0.1)
 
-# ---------- 确定停止原因和下一次起始点 ----------
 if checked == MAX_ENTRIES_PER_RUN:
-    # 达到条目上限 → 继续推进
-    next_start = current_num   # 已递增，指向下一个未检查编号
+    next_start = current_num
     should_continue = True
-    reason = "max_entries"
 else:
-    # 因 233 连续无效停止（此时 current_num 未递增，指向无效段第一个编号）
     next_start = current_num
     should_continue = False
-    reason = "consecutive_invalid"
 
-# 保存状态
 with open(NEXT_START_FILE, 'w') as f:
     f.write(str(next_start))
 
-# 向 GitHub Actions 输出标志
 github_output = os.environ.get('GITHUB_OUTPUT')
 if github_output:
     with open(github_output, 'a') as f:
         f.write(f"should_continue={str(should_continue).lower()}\n")
 
-print(f"Stopped. Reason: {reason}, checked {checked} entries.")
-print(f"Next start will be: W{next_start:08d}")
-print(f"should_continue={should_continue}")
+# ---------- 格式转换 (生成带URL的CSV, JSON, XML) ----------
+def generate_formats(csv_path, output_base_name):
+    if not os.path.exists(csv_path): return
+    json_list = []
+    xml_root = ET.Element("Records")
+    
+    enriched_csv_path = os.path.join(STATE_DIR, f"{output_base_name}_with_url.csv")
+    
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        
+    with open(enriched_csv_path, 'w', encoding='utf-8') as f_out:
+        f_out.write("WID,FileName,URL\n")
+        
+        for line in lines[1:]:
+            line = line.strip()
+            if not line: continue
+            parts = line.split(',', 1)
+            wid = parts[0]
+            filename = parts[1] if len(parts) > 1 else ""
+            url = f"{BASE_URL}?contextNo={wid}"
+            
+            f_out.write(f"{wid},{filename},{url}\n")
+            
+            json_list.append({"WID": wid, "FileName": filename, "URL": url})
+            
+            record = ET.SubElement(xml_root, "Record")
+            ET.SubElement(record, "WID").text = wid
+            ET.SubElement(record, "FileName").text = filename
+            ET.SubElement(record, "URL").text = url
+            
+    with open(os.path.join(STATE_DIR, f"{output_base_name}.json"), 'w', encoding='utf-8') as f:
+        json.dump(json_list, f, indent=2, ensure_ascii=False)
+        
+    xml_str = xml.dom.minidom.parseString(ET.tostring(xml_root)).toprettyxml(indent="  ")
+    with open(os.path.join(STATE_DIR, f"{output_base_name}.xml"), 'w', encoding='utf-8') as f:
+        f.write(xml_str)
+
+print("Generating output formats (CSV+URL, JSON, XML)...")
+generate_formats(CSV_ALL, "results_all")
+generate_formats(CSV_VALID_ALL, "valid_all")
+generate_formats(CSV_NEW, "results_new")
+generate_formats(CSV_VALID_NEW, "valid_new")
+
+print(f"Stopped. checked {checked} entries. Next start: W{next_start:08d}")

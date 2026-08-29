@@ -1,39 +1,43 @@
 name: Incremental Scanner
 
 on:
-  push:                # 提交时触发
+  push:                     # 代码提交时触发
   schedule:
-    - cron: '0 */8 * * *'   # 每8小时自动运行
-  workflow_dispatch:        # 手动触发
-    inputs:
+    - cron: '0 */8 * * *'   # 定时任务：每 8 小时自动运行一次
+  workflow_dispatch:        # 支持在 GitHub Actions 页面手动触发
+    inputs:                 # 声明输入参数，防止 API 触发时报 422 错误
       continued:
         description: 'Indicates if this is an automatically continued run'
         required: false
         type: string
 
+# 并发控制：确保同一时间只有一个扫描任务在运行。
+# 如果有任务正在运行，新的触发（如 push 或定时）会排队等待，防止缓存被互相覆盖踩踏。
 concurrency: 
   group: scanner-group
-  cancel-in-progress: false
+  cancel-in-progress: false 
 
 permissions:
   contents: read
-  actions: write            # 允许触发新的工作流
+  actions: write            # 赋予写权限：这是使用 API 触发下一次工作流所必需的
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 300    # 5小时超时（留有余量）
+    timeout-minutes: 300    # 设置 5 小时超时上限，为单次 3250 条扫描留出充足余量
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1. 仅恢复缓存（使用动态后缀匹配最近一次）
+      # ---------------- 缓存机制：恢复阶段 ----------------
+      # 注意：这里仅使用 restore，不进行 save。
+      # 利用 restore-keys 的回退机制，按前缀匹配最近一次成功保存的进度。
       - name: Restore State (Cache)
         uses: actions/cache/restore@v4
         with:
           path: state
-          # 加入 run_attempt 防止手动 re-run 时缓存键冲突报错
+          # 使用 run_id 和 run_attempt 组合，确保每次生成的缓存键都是唯一的
           key: scanner-state-v-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             scanner-state-v-
@@ -46,32 +50,64 @@ jobs:
       - name: Run Scanner
         id: run
         env:
-          BASE_URL: "https://iknow.service.hihonor.com/weknow/servlet/download/public"   # 替换为实际URL
+          # 目标服务器基础 URL
+          BASE_URL: "https://iknow.service.hihonor.com/weknow/servlet/download/public"   
         run: python scanner.py
 
-      - name: Upload Full History
+      # ---------------- 产物上传：拆分为 4 个独立压缩包 ----------------
+      
+      - name: Upload 1 - Full History (All)
         uses: actions/upload-artifact@v4
         with:
-          name: full-history-${{ github.run_id }}
-          path: state/results.csv
-          if-no-files-found: error
+          name: full-history-all-${{ github.run_id }}
+          path: |
+            state/results_all_with_url.csv
+            state/results_all.json
+            state/results_all.xml
+          if-no-files-found: ignore   # 如果文件不存在则忽略，避免报错
 
-      - name: Upload New Records
+      - name: Upload 2 - Full History (Valid Only)
         uses: actions/upload-artifact@v4
         with:
-          name: new-records-${{ github.run_id }}
-          path: state/new.csv
-          if-no-files-found: error
+          name: full-history-valid-${{ github.run_id }}
+          path: |
+            state/valid_all_with_url.csv
+            state/valid_all.json
+            state/valid_all.xml
+          if-no-files-found: ignore
 
-      # 2. 强制在触发下一次运行前保存缓存
+      - name: Upload 3 - New Records (All)
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-records-all-${{ github.run_id }}
+          path: |
+            state/results_new_with_url.csv
+            state/results_new.json
+            state/results_new.xml
+          if-no-files-found: ignore
+
+      - name: Upload 4 - New Records (Valid Only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-records-valid-${{ github.run_id }}
+          path: |
+            state/valid_new_with_url.csv
+            state/valid_new.json
+            state/valid_new.xml
+          if-no-files-found: ignore
+
+      # ---------------- 缓存机制：保存阶段 ----------------
+      # 关键修复：必须在 "Trigger Next Run" 之前强制保存缓存。
+      # 这阻断了“竞态条件”，确保下一次运行被拉起时，最新的进度已经安全写入了缓存系统。
       - name: Save State (Cache)
         uses: actions/cache/save@v4
         with:
           path: state
           key: scanner-state-v-${{ github.run_id }}-${{ github.run_attempt }}
 
-      # 3. 触发下一次运行（此时新缓存已安全保存完毕）
-      - name: Trigger Next Run (if max entries reached)
+      # ---------------- 自动接力：触发下一次运行 ----------------
+      # 当 Python 脚本判断达到 3250 条且需要继续时，拉起新一轮工作流
+      - name: Trigger Next Run
         if: steps.run.outputs.should_continue == 'true'
         uses: actions/github-script@v7
         with:
@@ -80,18 +116,15 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'scanner.yml',   // 当前工作流文件名
+              workflow_id: 'scanner.yml',   // 当前工作流的文件名，必须匹配
               ref: context.ref,
-              inputs: { continued: 'true' } // 传递已声明的参数
+              inputs: { continued: 'true' } // 传递在顶部声明的参数
             });
 
+      # ---------------- 运行摘要 ----------------
+      # 在 GitHub Actions 运行页面的 Summary 面板输出直观的统计信息
       - name: Post Summary
         run: |
           echo "## ✅ Scan Completed" >> $GITHUB_STEP_SUMMARY
-          if [ -f state/results.csv ]; then
-            echo "Total records in history: $(($(wc -l < state/results.csv) - 1))" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ -f state/new.csv ]; then
-            echo "New records this run: $(($(wc -l < state/new.csv) - 1))" >> $GITHUB_STEP_SUMMARY
-          fi
           echo "Next start ID: W$(cat state/next_start.txt | xargs printf '%08d')" >> $GITHUB_STEP_SUMMARY
+          
