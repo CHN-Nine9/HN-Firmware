@@ -159,7 +159,11 @@ def generate_formats(csv_path, output_base_name):
             
             json_list.append({"WID": wid, "FileName": filename, "URL": url})
             
-            record = ET.SubElement(xml_root, "Record")
+            # 提取纯数字 ID (去掉 'W' 并去除前导零，例如 W00065550 -> 65550)
+            numeric_id = str(int(wid[1:]))
+            
+            # 创建带有 id 属性的 Record 节点
+            record = ET.SubElement(xml_root, "Record", id=numeric_id)
             ET.SubElement(record, "WID").text = wid
             ET.SubElement(record, "FileName").text = filename
             ET.SubElement(record, "URL").text = url
