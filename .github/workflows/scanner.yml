@@ -125,6 +125,33 @@ jobs:
       # 在 GitHub Actions 运行页面的 Summary 面板输出直观的统计信息
       - name: Post Summary
         run: |
-          echo "## ✅ Scan Completed" >> $GITHUB_STEP_SUMMARY
-          echo "Next start ID: W$(cat state/next_start.txt | xargs printf '%08d')" >> $GITHUB_STEP_SUMMARY
-          
+          # 辅助函数：统计 CSV 文件数据行数（剔除首行表头）
+          get_csv_count() {
+            if [ -f "$1" ]; then
+              local lines=$(wc -l < "$1" | tr -d ' ')
+              echo $(( lines > 0 ? lines - 1 : 0 ))
+            else
+              echo 0
+            fi
+          }
+
+          THIS_TOTAL=$(get_csv_count state/new.csv)
+          THIS_VALID=$(get_csv_count state/valid_new.csv)
+          CUMULATIVE_TOTAL=$(get_csv_count state/results.csv)
+          CUMULATIVE_VALID=$(get_csv_count state/valid_results.csv)
+          NEXT_ID=$(printf "W%08d" "$(cat state/next_start.txt 2>/dev/null || echo 0)")
+
+          {
+            echo "## ✅ Scan Completed"
+            echo ""
+            echo "### ⏱️ Current Run"
+            echo "* 🔍 **Scanned Entries**: ${THIS_TOTAL}"
+            echo "* 🎯 **Valid Entries**: ${THIS_VALID}"
+            echo ""
+            echo "### 📊 Cumulative Total"
+            echo "* 📈 **Total Scanned**: ${CUMULATIVE_TOTAL}"
+            echo "* 🏆 **Total Valid**: ${CUMULATIVE_VALID}"
+            echo ""
+            echo "### ⏭️ Next Run"
+            echo "* 🆔 **Next Start ID**: ${NEXT_ID}"
+          } >> $GITHUB_STEP_SUMMARY
