@@ -121,7 +121,7 @@ jobs:
               inputs: { continued: 'true' } // 传递在顶部声明的参数
             });
 
-      # ---------------- 运行摘要 ----------------
+# ---------------- 运行摘要 ----------------
       # 在 GitHub Actions 运行页面的 Summary 面板输出直观的统计信息
       - name: Post Summary
         run: |
@@ -141,6 +141,21 @@ jobs:
           CUMULATIVE_VALID=$(get_csv_count state/valid_results.csv)
           NEXT_ID=$(printf "W%08d" "$(cat state/next_start.txt 2>/dev/null || echo 0)")
 
+          # 计算运行耗时 (Duration)
+          END_TIME=$(date +%s)
+          START_TIME=${START_TIME:-$END_TIME}
+          DURATION_SEC=$(( END_TIME - START_TIME ))
+          DURATION_STR="$(printf '%dm %ds' $(( DURATION_SEC / 60 )) $(( DURATION_SEC % 60 )))"
+
+          # 映射触发类型 (Trigger Event)
+          EVENT_NAME="${{ github.event_name }}"
+          case "$EVENT_NAME" in
+            "workflow_dispatch") TRIGGER_TYPE="Manual Dispatch" ;;
+            "push")              TRIGGER_TYPE="Push" ;;
+            "schedule")          TRIGGER_TYPE="Schedule (Cron)" ;;
+            *)                   TRIGGER_TYPE="$EVENT_NAME" ;;
+          esac
+
           {
             echo "## ✅ Scan Completed"
             echo ""
@@ -154,4 +169,12 @@ jobs:
             echo ""
             echo "### ⏭️ Next Run"
             echo "* 🆔 **Next Start ID**: ${NEXT_ID}"
+            echo ""
+            echo "<details>"
+            echo "<summary>ℹ️ <b>Run Details & Metadata</b></summary>"
+            echo ""
+            echo "* 🆔 **Run ID / Attempt**: ${{ github.run_id }} (#${{ github.run_attempt }})"
+            echo "* ⏳ **Execution Time**: ${DURATION_STR}"
+            echo "* ⚡ **Trigger Event**: ${TRIGGER_TYPE}"
+            echo "</details>"
           } >> $GITHUB_STEP_SUMMARY
