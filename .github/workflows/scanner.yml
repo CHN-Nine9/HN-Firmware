@@ -152,7 +152,7 @@ jobs:
               inputs: { continued: 'true' }
             });
 
-# ---------------- 运行摘要 ----------------
+      # ---------------- 运行摘要 ----------------
       # 在 GitHub Actions 运行页面的 Summary 面板输出直观的统计信息
       - name: Post Summary
         run: |
@@ -172,13 +172,28 @@ jobs:
           CUMULATIVE_VALID=$(get_csv_count state/valid_results.csv)
           NEXT_ID=$(printf "W%08d" "$(cat state/next_start.txt 2>/dev/null || echo 0)")
 
-          # 计算运行耗时 (Duration)
-          END_TIME=$(date +%s)
-          START_TIME=${START_TIME:-$END_TIME}
-          DURATION_SEC=$(( END_TIME - START_TIME ))
-          DURATION_STR="$(printf '%dm %ds' $(( DURATION_SEC / 60 )) $(( DURATION_SEC % 60 )))"
+          # 1. 获取准确的起止时间戳与计算总秒数
+          START_TIMESTAMP="${{ env.START_TIME }}"
+          END_TIMESTAMP=$(date +%s)
 
-          # 映射触发类型 (Trigger Event)
+          if [ -n "$START_TIMESTAMP" ]; then
+            DURATION_SEC=$(( END_TIMESTAMP - START_TIMESTAMP ))
+          else
+            DURATION_SEC=0
+          fi
+
+          # 2. 格式化为 Xh Ym Zs（如果小于 1 小时则自动省略 h）
+          HOURS=$(( DURATION_SEC / 3600 ))
+          MINUTES=$(( (DURATION_SEC % 3600) / 60 ))
+          SECONDS=$(( DURATION_SEC % 60 ))
+
+          if [ "$HOURS" -gt 0 ]; then
+            DURATION_STR="${HOURS}h ${MINUTES}m ${SECONDS}s"
+          else
+            DURATION_STR="${MINUTES}m ${SECONDS}s"
+          fi
+
+          # 3. 映射触发类型 (Trigger Event)
           EVENT_NAME="${{ github.event_name }}"
           case "$EVENT_NAME" in
             "workflow_dispatch") TRIGGER_TYPE="Manual Dispatch" ;;
