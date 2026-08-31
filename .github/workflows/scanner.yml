@@ -105,14 +105,14 @@ jobs:
           path: state
           key: scanner-state-v-${{ github.run_id }}-${{ github.run_attempt }}
 
-      # ---------------- 自动接力：触发下一次运行（带防堆叠检查） ----------------
+      # ---------------- 自动接力：触发下一次运行（与防堆叠） ----------------
       - name: Trigger Next Run
         if: steps.run.outputs.should_continue == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // 1. 查询当前仓库中处于 queued 或 in_progress 状态的工作流
+            // 1. 查询当前 workflow 所有处于 queued 状态的任务
             const runs = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -120,14 +120,29 @@ jobs:
               status: 'queued'
             });
 
-            // 2. 如果已经有在排队的任务（例如 8 小时到了自动触发的 schedule），就不再重复派发
+            // 过滤掉当前运行的任务本身
             const queuedRuns = runs.data.workflow_runs.filter(r => r.id !== context.runId);
-            
+
+            // 2. 如果排队的任务 >= 1 个：
+            // 保留第 1 个作为接力棒，取消剩下所有多余排队的（比如手动触发或 push 或定时产生的多余堆积）
             if (queuedRuns.length > 0) {
-              console.log(`Found ${queuedRuns.length} queued run(s). Skipping dispatch to prevent accumulation.`);
+              console.log(`Found ${queuedRuns.length} queued run(s).`);
+              
+              // 取消多余的排队任务
+              for (let i = 1; i < queuedRuns.length; i++) {
+                console.log(`Cancelling redundant queued run: ${queuedRuns[i].id}`);
+                await github.rest.actions.cancelWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: queuedRuns[i].id
+                });
+              }
+              
+              console.log(`Delegating next execution to queued run ID: ${queuedRuns[0].id}`);
               return;
             }
 
+            // 3. 如果队列空空如也，则正常触发下一次接力
             console.log('No queued runs found. Triggering next sequential run...');
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
