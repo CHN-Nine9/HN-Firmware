@@ -105,20 +105,36 @@ jobs:
           path: state
           key: scanner-state-v-${{ github.run_id }}-${{ github.run_attempt }}
 
-      # ---------------- 自动接力：触发下一次运行 ----------------
-      # 当 Python 脚本判断达到 3250 条且需要继续时，拉起新一轮工作流
+      # ---------------- 自动接力：触发下一次运行（带防堆叠检查） ----------------
       - name: Trigger Next Run
         if: steps.run.outputs.should_continue == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            // 1. 查询当前仓库中处于 queued 或 in_progress 状态的工作流
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'scanner.yml',
+              status: 'queued'
+            });
+
+            // 2. 如果已经有在排队的任务（例如 8 小时到了自动触发的 schedule），就不再重复派发
+            const queuedRuns = runs.data.workflow_runs.filter(r => r.id !== context.runId);
+            
+            if (queuedRuns.length > 0) {
+              console.log(`Found ${queuedRuns.length} queued run(s). Skipping dispatch to prevent accumulation.`);
+              return;
+            }
+
+            console.log('No queued runs found. Triggering next sequential run...');
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'scanner.yml',   // 当前工作流的文件名，必须匹配
+              workflow_id: 'scanner.yml',
               ref: context.ref,
-              inputs: { continued: 'true' } // 传递在顶部声明的参数
+              inputs: { continued: 'true' }
             });
 
 # ---------------- 运行摘要 ----------------
