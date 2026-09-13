@@ -3,7 +3,7 @@ name: Incremental Scanner
 on:
   push:                     # 代码提交时触发
   schedule:
-    - cron: '0 */8 * * *'   # 定时任务：每 8 小时自动运行一次
+    - cron: '0 */6 * * *'   # 定时任务：每 6 小时自动运行一次
   workflow_dispatch:        # 支持在 GitHub Actions 页面手动触发
     inputs:                 # 声明输入参数，防止 API 触发时报 422 错误
       continued:
